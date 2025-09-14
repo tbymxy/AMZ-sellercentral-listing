@@ -1,0 +1,291 @@
+// ==UserScript==
+// @name             Amazon Listing 工具箱（SKU + 描述要点一体）
+// @namespace        http://tampermonkey.net/
+// @version          7.0
+// @description      集成 SKU 批量生成、父SKU管理、复制/清空、一键填写标题/要点/描述/关键词/型号/制造商等字段，提升效率
+// @author           Optimized by ChatGPT
+// @match            https://sellercentral.amazon.*/abis/listing/*
+// @icon             https://www.amazon.com/favicon.ico
+// @grant            GM_setValue
+// @grant            GM_getValue
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    /*** ====================== 公共工具 ====================== ***/
+
+    // 状态提示（统一风格）
+    function showToast(msg, isSuccess = true) {
+        const toast = document.createElement('div');
+        toast.textContent = msg;
+        toast.style.position = 'fixed';
+        toast.style.bottom = '40px';
+        toast.style.right = '30px';
+        toast.style.zIndex = '999999';
+        toast.style.padding = '12px 18px';
+        toast.style.background = isSuccess ? '#e6f4ea' : '#fde8e8';
+        toast.style.color = isSuccess ? '#0f7c3d' : '#d72e2e';
+        toast.style.border = isSuccess ? '1px solid #a3d9b1' : '1px solid #f8b6b6';
+        toast.style.borderRadius = '6px';
+        toast.style.fontSize = '14px';
+        toast.style.boxShadow = '0 4px 10px rgba(0,0,0,0.2)';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    // 等待元素出现
+    function waitForElement(selector) {
+        return new Promise(resolve => {
+            if (document.querySelector(selector)) return resolve();
+            const observer = new MutationObserver(() => {
+                if (document.querySelector(selector)) {
+                    observer.disconnect();
+                    resolve();
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        });
+    }
+
+    // 设置 shadow DOM 输入框的值
+    function setKatValue(selector, value, type = 'input') {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const el = kat.shadowRoot.querySelector(type);
+        if (!el) return false;
+        try {
+            el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function setKatInputValue(sel, val) { return setKatValue(sel, val, 'input'); }
+    function setKatTextareaValue(sel, val) { return setKatValue(sel, val, 'textarea'); }
+    function setKatCheckboxChecked(selector, checked) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const box = kat.shadowRoot.querySelector('input[type="checkbox"]');
+        if (!box) return false;
+        if (box.checked !== checked) box.click();
+        return true;
+    }
+
+    /*** ====================== SKU 面板逻辑 ====================== ***/
+    function initSkuPanel() {
+        if (document.getElementById('sku-helper-panel')) return;
+
+        const panel = document.createElement('div');
+        panel.id = 'sku-helper-panel';
+        panel.style.cssText = `
+            position: fixed; top: 800px; right: 20px; width: 350px;
+            background: #fff; padding: 15px; border: 1px solid #ccc; border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 9999; font-family: Arial; font-size: 14px;
+        `;
+        panel.innerHTML = `
+            <h3 style="margin:0 0 12px;border-bottom:1px solid #eee;color:#232f3e;padding-bottom:8px;">📦 SKU辅助工具</h3>
+            <div style="margin-bottom:12px;">
+                <label style="font-weight:bold;color:#232f3e;">父SKU：</label>
+                <div style="display:flex;gap:5px;align-items:center;">
+                    <div id="baseSKU" style="flex:1;font-size:16px;font-weight:bold;border:1px solid #ddd;padding:4px 6px;border-radius:6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"></div>
+                    <button id="copyBaseSKU">复制</button>
+                    <button id="genBaseSKU">随机</button>
+                </div>
+            </div>
+            <div style="margin-bottom:12px;">
+                <label>生成模式：</label>
+                <select id="skuMode" style="width:100%;padding:5px;">
+                    <option value="letters">字母序列 (A,B,C...)</option>
+                    <option value="numbers">数字序列 (01,02...)</option>
+                </select>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button id="fillSKU" style="flex:2;background:#ff9900;color:#fff;">一键生成SKU</button>
+                <button id="clearSKU" style="flex:1;background:#eee;">清空</button>
+            </div>
+        `;
+        document.body.appendChild(panel);
+
+        const baseBox = panel.querySelector('#baseSKU');
+        const copyBtn = panel.querySelector('#copyBaseSKU');
+        const genBtn = panel.querySelector('#genBaseSKU');
+        const fillBtn = panel.querySelector('#fillSKU');
+        const clearBtn = panel.querySelector('#clearSKU');
+        const modeSel = panel.querySelector('#skuMode');
+
+        // 生成随机父SKU
+        function genRandomBase() {
+            const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+            const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            let rnd = '';
+            for (let i = 0; i < 4; i++) rnd += chars[Math.floor(Math.random() * chars.length)];
+            return `A${date}-${rnd}`;
+        }
+
+        // 生成字母序列
+        function letterSeq(i) {
+            const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            let seq = "";
+            while (i >= 0) {
+                seq = letters[i % 26] + seq;
+                i = Math.floor(i / 26) - 1;
+            }
+            return seq;
+        }
+
+        // 填写 input
+        function setInput(input, val) {
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            setter.call(input, val);
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            input.setAttribute('data-auto-generated', 'true');
+        }
+
+        // 获取所有SKU输入框
+        function getSKUInputs() {
+            const res = [];
+            document.querySelectorAll('input[aria-label="SKU"]').forEach(i => res.push(i));
+            if (res.length === 0) {
+                document.querySelectorAll("kat-input").forEach(kat => {
+                    if (kat.shadowRoot) {
+                        const i = kat.shadowRoot.querySelector('input[aria-label="SKU"]');
+                        if (i) res.push(i);
+                    }
+                });
+            }
+            return res;
+        }
+
+        // 初始化父SKU
+        (async () => {
+            let val = await GM_getValue('baseSKU', '');
+            if (!val) { val = genRandomBase(); await GM_setValue('baseSKU', val); }
+            baseBox.textContent = val;
+            modeSel.value = await GM_getValue('skuMode', 'letters');
+        })();
+
+        genBtn.onclick = async () => {
+            const val = genRandomBase();
+            baseBox.textContent = val;
+            await GM_setValue('baseSKU', val);
+            showToast("已生成父SKU");
+        };
+
+        copyBtn.onclick = async () => {
+            try {
+                await navigator.clipboard.writeText(baseBox.textContent);
+                showToast("父SKU已复制");
+            } catch {
+                showToast("复制失败", false);
+            }
+        };
+
+        modeSel.onchange = () => GM_setValue('skuMode', modeSel.value);
+
+        fillBtn.onclick = () => {
+            const base = baseBox.textContent;
+            const mode = modeSel.value;
+            const inputs = getSKUInputs();
+            if (!base || inputs.length === 0) return showToast("未找到SKU输入框", false);
+
+            let n = 0;
+            inputs.forEach((inp, i) => {
+                const sku = mode === 'letters' ? `${base}-${letterSeq(i)}` : `${base}-${String(i+1).padStart(2,'0')}`;
+                setInput(inp, sku); n++;
+            });
+            showToast(`已生成 ${n} 个SKU`);
+        };
+
+        clearBtn.onclick = () => {
+            const inputs = getSKUInputs();
+            let n = 0;
+            inputs.forEach(i => {
+                if (i.getAttribute('data-auto-generated') === 'true') {
+                    setInput(i, ''); n++;
+                }
+            });
+            showToast(`已清空 ${n} 个SKU`);
+        };
+    }
+
+    /*** ====================== 文案面板逻辑 ====================== ***/
+    function initInfoPanel() {
+        if (document.getElementById('auto-fill-panel')) return;
+
+        const panel = document.createElement('div');
+        panel.id = 'auto-fill-panel';
+        panel.style.cssText = `
+            position: fixed; top: 100px; right: 20px; width: 350px;
+            background:#fff; border:1px solid #ccc; border-radius:10px; padding:15px;
+            z-index:9999; font-size:14px; box-shadow:0 4px 12px rgba(0,0,0,0.15);
+        `;
+        panel.innerHTML = `
+          <h3 style="margin:0 0 12px;border-bottom:1px solid #eee;color:#232f3e;padding-bottom:8px;">📝 一键填写工具</h3>
+          <label>标题：</label><input id="my-title" style="width:100%;padding:5px;margin-bottom:8px;">
+          <label>要点（支持【标题】+正文）：</label><textarea id="my-bullets" rows="6" style="width:100%;margin-bottom:8px;"></textarea>
+          <label>描述：</label><textarea id="my-desc" rows="4" style="width:100%;margin-bottom:8px;"></textarea>
+          <label>搜索关键字：</label><input id="my-keywords" style="width:100%;padding:5px;margin-bottom:8px;">
+          <button id="fillInfo" style="width:100%;padding:8px;background:#ff9900;color:#fff;border:none;border-radius:5px;">填写文案</button>
+          <button id="fillSKUInfo" style="width:100%;padding:8px;background:#28a745;color:#fff;border:none;border-radius:5px;margin-top:6px;">填写型号信息</button>
+          <button id="clearAll" style="width:100%;padding:8px;background:#dc3545;color:#fff;border:none;border-radius:5px;margin-top:6px;">清空全部</button>
+        `;
+        document.body.appendChild(panel);
+
+        const genSKU = () => {
+            const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+            const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            return `A${date}-${chars[Math.floor(Math.random()*36)]}${chars[Math.floor(Math.random()*36)]}`;
+        };
+
+        function parseBullets(raw) {
+            const m = [...raw.matchAll(/【(.*?)】([\s\S]*?)(?=(?:【|$))/g)];
+            return m.slice(0,5).map(x=>`【${x[1].trim()}】${x[2].trim().replace(/\n+/g,' ')}`);
+        }
+
+        document.getElementById('fillInfo').onclick = () => {
+            const title = document.getElementById('my-title').value;
+            const bullets = parseBullets(document.getElementById('my-bullets').value);
+            const desc = document.getElementById('my-desc').value;
+            const keywords = document.getElementById('my-keywords').value;
+
+            let ok = 0;
+            if (setKatTextareaValue('kat-textarea[name="item_name-0-value"]', title)) ok++;
+            bullets.forEach((b,i)=>{ if(setKatTextareaValue(`kat-textarea[name="bullet_point-${i}-value"]`,b)) ok++; });
+            if (setKatTextareaValue('kat-textarea[name="product_description-0-value"]', desc)) ok++;
+            if (setKatInputValue('kat-input[name="generic_keyword-0-value"]', keywords)) ok++;
+            showToast(ok>0 ? "已填写文案" : "未找到输入框", ok>0);
+        };
+
+        document.getElementById('fillSKUInfo').onclick = () => {
+            const sku = genSKU();
+            let ok = 0;
+            if (setKatInputValue('kat-input[name="model_number-0-value"]', sku)) ok++;
+            if (setKatTextareaValue('kat-textarea[name="model_name-0-value"]', sku)) ok++;
+            if (setKatInputValue('kat-input[name="manufacturer-0-value"]', sku)) ok++;
+            if (setKatInputValue('kat-input[name="part_number-0-value"]', sku)) ok++;
+            showToast(ok>0 ? `已填写型号信息: ${sku}` : "未找到输入框", ok>0);
+        };
+
+        document.getElementById('clearAll').onclick = () => {
+            let n = 0;
+            ['item_name-0-value','product_description-0-value'].forEach(f=>{ if(setKatTextareaValue(`kat-textarea[name="${f}"]`,'')) n++; });
+            for(let i=0;i<5;i++){ if(setKatTextareaValue(`kat-textarea[name="bullet_point-${i}-value"]`,'')) n++; }
+            ['generic_keyword-0-value','model_number-0-value','manufacturer-0-value','part_number-0-value'].forEach(f=>{ if(setKatInputValue(`kat-input[name="${f}"]`,'')) n++; });
+            setKatTextareaValue('kat-textarea[name="model_name-0-value"]','');
+            setKatCheckboxChecked('kat-checkbox[data-testid="no-brand-name-checkbox"]',true);
+            setKatCheckboxChecked('kat-checkbox[data-cy="upc-exemption-checkbox"]',true);
+            showToast("已清空所有内容");
+        };
+    }
+
+    /*** ====================== 启动逻辑 ====================== ***/
+    waitForElement('kat-textarea[name="item_name-0-value"]').then(() => {
+        initSkuPanel();
+        initInfoPanel();
+    });
+
+})();
