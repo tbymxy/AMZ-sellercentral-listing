@@ -1,0 +1,634 @@
+// ==UserScript==
+// @name             亚马逊Listing全能辅助工具（精简版·自动合规）
+// @namespace        http://tampermonkey.net/
+// @version          8.0
+// @description      集成父SKU自动生成、子SKU字母序列填充、产品信息一键填写。页面加载后自动勾选“无品牌”和“无商品编码”，一键清空仅清除内容。
+// @author           Optimized Version
+// @match            https://sellercentral.amazon.com/abis/listing/*
+// @match            https://sellercentral.amazon.ca/abis/listing/*
+// @match            https://sellercentral.amazon.com.mx/abis/listing/*
+// @match            https://sellercentral-japan.amazon.com/abis/listing/*
+// @match            https://sellercentral.amazon.com.au/abis/listing/*
+// @match            https://sellercentral.amazon.co.uk/abis/listing/*
+// @match            https://sellercentral.amazon.de/abis/listing/*
+// @match            https://sellercentral.amazon.fr/abis/listing/*
+// @match            https://sellercentral.amazon.it/abis/listing/*
+// @match            https://sellercentral.amazon.es/abis/listing/*
+// @match            https://sellercentral.amazon.nl/abis/listing/*
+// @match            https://sellercentral.amazon.se/abis/listing/*
+// @match            https://sellercentral.amazon.pl/abis/listing/*
+// @match            https://sellercentral.amazon.be/abis/listing/*
+// @icon             https://www.amazon.com/favicon.ico
+// @grant            GM_setValue
+// @grant            GM_getValue
+// @grant            GM_addStyle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // =============== 样式注入 ===============
+    const style = document.createElement('style');
+    style.textContent = `
+        .amazon-helper-panel {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            width: 350px;
+            background: white !important;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+            z-index: 99999 !important;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .amazon-helper-panel h3 {
+            margin: 0 0 12px 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+            color: #232f3e;
+            font-weight: bold;
+        }
+        .amazon-helper-panel .form-group {
+            margin-bottom: 16px;
+        }
+        .amazon-helper-panel label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: bold;
+            color: #232f3e;
+            font-size: 14px;
+        }
+        .amazon-helper-panel input, .amazon-helper-panel select, .amazon-helper-panel textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #a6a6a6;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        .amazon-helper-panel input:focus, .amazon-helper-panel select:focus, .amazon-helper-panel textarea:focus {
+            outline: none;
+            border-color: #ff9900;
+            box-shadow: 0 0 0 3px rgba(255, 153, 0, 0.2);
+        }
+        .amazon-helper-panel .sku-display {
+            flex-grow: 1;
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            background: #fff;
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid #d4d4d4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 5px;
+        }
+        .amazon-helper-panel .input-with-buttons {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+        .amazon-helper-panel .input-with-buttons button {
+            width: auto;
+            white-space: nowrap;
+            padding: 8px 12px;
+            border: 1px solid #a6a6a6;
+            border-radius: 4px;
+            background-color: #f0f0f0;
+            cursor: pointer;
+            font-size: 14px;
+            color: #333;
+            transition: background-color 0.2s ease;
+        }
+        .amazon-helper-panel .input-with-buttons button.copy-btn {
+            background-color: #e6f4ea;
+            border-color: #a3d9b1;
+            color: #0f7c3d;
+        }
+        .amazon-helper-panel .input-with-buttons button:hover {
+            background-color: #e0e0e0;
+        }
+        .amazon-helper-panel .input-with-buttons button.copy-btn:hover {
+            background-color: #d8f1e0;
+        }
+        .amazon-helper-panel .button-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 15px;
+        }
+        .amazon-helper-panel button {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s ease;
+            flex: 1;
+        }
+        .amazon-helper-panel button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .amazon-helper-panel .primary-btn {
+            background-color: #ff9900;
+            color: white;
+        }
+        .amazon-helper-panel .primary-btn:hover:not(:disabled) {
+            background-color: #e88a00;
+        }
+        .amazon-helper-panel .secondary-btn {
+            background-color: #e6e6e6;
+            color: #333;
+        }
+        .amazon-helper-panel .secondary-btn:hover:not(:disabled) {
+            background-color: #d6d6d6;
+        }
+        .amazon-helper-panel .tertiary-btn {
+            background-color: #28a745;
+            color: white;
+        }
+        .amazon-helper-panel .tertiary-btn:hover:not(:disabled) {
+            background-color: #218838;
+        }
+        .amazon-helper-panel .danger-btn {
+            background-color: #dc3545;
+            color: white;
+        }
+        .amazon-helper-panel .danger-btn:hover:not(:disabled) {
+            background-color: #c82333;
+        }
+        .amazon-helper-panel .status-message {
+            margin-top: 12px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .amazon-helper-panel .success {
+            background-color: #e6f4ea;
+            color: #0f7c3d;
+            border: 1px solid #a3d9b1;
+        }
+        .amazon-helper-panel .error {
+            background-color: #fde8e8;
+            color: #d72e2e;
+            border: 1px solid #f8b6b6;
+        }
+        .amazon-helper-panel textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+        .amazon-helper-panel hr {
+            border: none;
+            border-top: 1px dashed #ddd;
+            margin: 16px 0;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // =============== 工具函数 ===============
+    function waitForElement(selector, timeout = 10000) {
+        return new Promise((resolve, reject) => {
+            const start = Date.now();
+            const check = () => {
+                const el = document.querySelector(selector);
+                if (el) return resolve(el);
+                if (Date.now() - start > timeout) return reject(new Error(`Timeout waiting for ${selector}`));
+                setTimeout(check, 200);
+            };
+            check();
+        });
+    }
+
+    function setKatInputValue(selector, value) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const real = kat.shadowRoot.querySelector('input');
+        if (!real) return false;
+        real.value = value;
+        real.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        real.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+    }
+
+    function setKatTextareaValue(selector, value) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const real = kat.shadowRoot.querySelector('textarea');
+        if (!real) return false;
+        real.value = value;
+        real.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        real.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+    }
+
+    function setKatCheckboxChecked(selector, checked) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const real = kat.shadowRoot.querySelector('input[type="checkbox"]');
+        if (!real) return false;
+        if (real.checked !== checked) {
+            real.click(); // 触发亚马逊内部事件
+        }
+        return true;
+    }
+
+    function showStatus(message, isSuccess) {
+        const status = document.getElementById('sc-statusMessage');
+        if (!status) return;
+        status.textContent = message;
+        status.className = `status-message ${isSuccess ? 'success' : 'error'}`;
+        status.style.display = 'block';
+        setTimeout(() => { status.style.display = 'none'; }, 3000);
+    }
+
+    function generateRandomBaseSKU() {
+        const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+        const prefix = "A" + date;
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let random = "";
+        for (let i = 0; i < 4; i++) {
+            random += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return `${prefix}-${random}`;
+    }
+
+    function generateLetterSequence(index) {
+        const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let sequence = "";
+        let i = index;
+        while (i >= 0) {
+            sequence = letters[i % 26] + sequence;
+            i = Math.floor(i / 26) - 1;
+        }
+        return sequence;
+    }
+
+    function parseBulletText(text) {
+        const matches = [...text.matchAll(/【(.*?)】([\s\S]*?)(?=(?:【|$))/g)];
+        return matches.slice(0, 5).map(m => `【${m[1].trim()}】${m[2].trim().replace(/\n+/g, ' ')}`);
+    }
+
+    function convertToAmazonHTML(text) {
+        if (!text) return '';
+        const paragraphs = text.trim().split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`);
+        return paragraphs.join('');
+    }
+
+    function setInputValue(input, value) {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, "value"
+        ).set;
+        nativeInputValueSetter.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        input.setAttribute('data-auto-generated', 'true');
+    }
+
+    function getAllSKUInputs() {
+        const inputs = [];
+        document.querySelectorAll('input[aria-label="SKU"]').forEach(input => inputs.push(input));
+        if (inputs.length === 0) {
+            document.querySelectorAll("kat-input").forEach(kat => {
+                if (kat.shadowRoot) {
+                    const innerInput = kat.shadowRoot.querySelector('input[aria-label="SKU"]');
+                    if (innerInput) inputs.push(innerInput);
+                }
+            });
+        }
+        return inputs;
+    }
+
+    function setButtonState(button, enabled, text) {
+        button.disabled = !enabled;
+        button.textContent = text;
+    }
+
+    // =============== 主面板构建 ===============
+    async function initPanel() {
+        if (document.getElementById('amazon-helper-panel')) return;
+
+        const panel = document.createElement('div');
+        panel.id = 'amazon-helper-panel';
+        panel.className = 'amazon-helper-panel';
+        panel.innerHTML = `
+            <h3>📦 亚马逊Listing全能助手</h3>
+
+            <h4>🔹 SKU 自动生成</h4>
+            <div class="form-group">
+                <label for="sc-baseSKU">父SKU</label>
+                <div class="input-with-buttons">
+                    <div id="sc-baseSKU-display" class="sku-display"></div>
+                    <button id="sc-copyBaseSKU" class="copy-btn" title="复制父SKU">复制</button>
+                    <button id="sc-generateRandomSKU" title="生成随机父SKU">随机生成</button>
+                </div>
+            </div>
+            <div class="button-group">
+                <button id="sc-fillSKU" class="primary-btn" disabled>一键生成子SKU</button>
+                <button id="sc-clearSKU" class="secondary-btn" disabled>清空自动生成SKU</button>
+            </div>
+            <hr>
+
+            <h4>📝 产品信息填写</h4>
+            <div class="form-group">
+                <label for="my-title">标题</label>
+                <input type="text" id="my-title" placeholder="输入产品标题" />
+            </div>
+            <div class="form-group">
+                <label for="my-bullets">要点（支持【标题】+正文）</label>
+                <textarea id="my-bullets" placeholder="例如：【防水设计】适合户外使用\n【轻便易携】重量仅200g"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="my-desc">产品描述（支持换行）</label>
+                <textarea id="my-desc" placeholder="输入详细描述，支持段落格式"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="my-keywords">搜索关键字</label>
+                <input type="text" id="my-keywords" placeholder="用空格或逗号分隔" />
+            </div>
+            <div class="button-group">
+                <button id="fill-content" class="tertiary-btn" disabled>一键填写产品信息</button>
+            </div>
+            <hr>
+
+            <h4>🏷️ 型号与认证信息</h4>
+            <div class="button-group">
+                <button id="fill-model" class="tertiary-btn" disabled>一键生成并填写型号信息</button>
+            </div>
+            <hr>
+
+            <h4>🗑️ 清空内容</h4>
+            <div class="button-group">
+                <button id="clear-all" class="danger-btn" disabled>一键清空所有内容</button>
+            </div>
+
+            <div id="sc-statusMessage" class="status-message"></div>
+        `;
+        document.body.appendChild(panel);
+
+        const baseSKUDisplay = document.getElementById('sc-baseSKU-display');
+        const fillSKUBtn = document.getElementById('sc-fillSKU');
+        const clearSKUBtn = document.getElementById('sc-clearSKU');
+        const generateRandomBtn = document.getElementById('sc-generateRandomSKU');
+        const copyBaseSKUBtn = document.getElementById('sc-copyBaseSKU');
+        const fillContentBtn = document.getElementById('fill-content');
+        const fillModelBtn = document.getElementById('fill-model');
+        const clearAllBtn = document.getElementById('clear-all');
+
+        const myTitle = document.getElementById('my-title');
+        const myBullets = document.getElementById('my-bullets');
+        const myDesc = document.getElementById('my-desc');
+        const myKeywords = document.getElementById('my-keywords');
+
+        let storedBaseSKU = await GM_getValue('sc-baseSKU', '');
+        if (!storedBaseSKU) {
+            storedBaseSKU = generateRandomBaseSKU();
+            await GM_setValue('sc-baseSKU', storedBaseSKU);
+        }
+        baseSKUDisplay.textContent = storedBaseSKU;
+
+        let autoCheckedDone = false;
+
+        function clickKatCheckbox(kat) {
+            if (!kat) return false;
+            let inner = kat.shadowRoot?.querySelector('input[type="checkbox"], div[role="checkbox"], button');
+            if (!inner) inner = kat;
+
+            const isChecked = inner.getAttribute('aria-checked') === 'true' || inner.checked === true;
+            if (!isChecked) {
+                inner.click();
+                return true;
+            }
+            return false;
+        }
+
+        function tryAutoCheck() {
+            if (autoCheckedDone) return;
+
+            const brandCheckbox = document.querySelector('#attribute-group-brand kat-checkbox.brand-checkbox, #attribute-group-brand div.brand-checkbox > kat-checkbox');
+            const upcCheckbox = document.querySelector('#attribute-group-externally_assigned_product_identifier kat-checkbox.product-id-checkbox');
+
+            let clicked = false;
+
+            if (brandCheckbox && clickKatCheckbox(brandCheckbox)) {
+                console.log('✅ 已勾选无品牌');
+                clicked = true;
+            }
+
+            if (upcCheckbox && clickKatCheckbox(upcCheckbox)) {
+                console.log('✅ 已勾选无商品编码');
+                clicked = true;
+            }
+
+            const brandChecked = brandCheckbox && (
+                brandCheckbox.shadowRoot?.querySelector('input, div[role="checkbox"]')?.getAttribute('aria-checked') === 'true'
+                || brandCheckbox.shadowRoot?.querySelector('input')?.checked === true
+            );
+
+            const upcChecked = upcCheckbox && (
+                upcCheckbox.shadowRoot?.querySelector('input, div[role="checkbox"]')?.getAttribute('aria-checked') === 'true'
+                || upcCheckbox.shadowRoot?.querySelector('input')?.checked === true
+            );
+
+            if (brandChecked && upcChecked) {
+                autoCheckedDone = true;
+                showStatus('✅ 已自动勾选“无品牌”和“无商品编码”', true);
+                console.log('✅ 检测到两个勾选框已完成，停止监听');
+                observer.disconnect();
+            } else if (clicked) {
+                showStatus('✅ 已尝试勾选合规选项', true);
+            }
+        }
+
+        const observer = new MutationObserver(() => {
+            tryAutoCheck();
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        setTimeout(tryAutoCheck, 3000);
+
+        async function enableButtons() {
+            setButtonState(fillSKUBtn, true, '一键生成子SKU');
+            setButtonState(clearSKUBtn, true, '清空自动生成SKU');
+            setButtonState(fillContentBtn, true, '一键填写产品信息');
+            setButtonState(fillModelBtn, true, '一键生成并填写型号信息');
+            setButtonState(clearAllBtn, true, '一键清空所有内容');
+        }
+
+        try {
+            await Promise.all([
+                waitForElement('kat-textarea[name="item_name-0-value"]'),
+                waitForElement('kat-input[name="model_number-0-value"]'),
+                waitForElement('input[aria-label="SKU"]')
+            ]);
+            enableButtons();
+            // === 自动执行：先清空，再填写 ===
+            await new Promise(resolve => setTimeout(resolve, 500)); // 延迟以确保按钮可用
+            clearAllBtn.click();
+            await new Promise(resolve => setTimeout(resolve, 500));
+            fillModelBtn.click();
+            // ============================
+        } catch (err) {
+            console.warn('DOM加载超时，但仍尝试启用按钮', err);
+            enableButtons();
+        }
+
+        generateRandomBtn.addEventListener('click', async () => {
+            const newSku = generateRandomBaseSKU();
+            baseSKUDisplay.textContent = newSku;
+            await GM_setValue('sc-baseSKU', newSku);
+            showStatus("已生成新的父SKU", true);
+        });
+
+        copyBaseSKUBtn.addEventListener('click', async () => {
+            const sku = baseSKUDisplay.textContent;
+            if (!sku) {
+                showStatus("没有可复制的父SKU", false);
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(sku);
+                showStatus("父SKU已复制到剪贴板", true);
+            } catch (err) {
+                showStatus("复制失败，请手动复制", false);
+                console.error("复制失败:", err);
+            }
+        });
+
+        fillSKUBtn.addEventListener('click', async () => {
+            const base = baseSKUDisplay.textContent;
+            if (!base) {
+                showStatus("请先生成或设置父SKU", false);
+                return;
+            }
+
+            setButtonState(fillSKUBtn, false, "生成中...");
+            const skuInputs = getAllSKUInputs();
+
+            if (skuInputs.length === 0) {
+                showStatus("未找到SKU输入框", false);
+                setButtonState(fillSKUBtn, true, "一键生成子SKU");
+                return;
+            }
+
+            let successCount = 0;
+            skuInputs.forEach((input, i) => {
+                try {
+                    const sku = `${base}-${generateLetterSequence(i)}`;
+                    setInputValue(input, sku);
+                    successCount++;
+                } catch (error) {
+                    console.error("生成SKU时出错:", error);
+                }
+            });
+
+            setButtonState(fillSKUBtn, true, "一键生成子SKU");
+            showStatus(`成功生成 ${successCount}/${skuInputs.length} 个SKU`, true);
+        });
+
+        clearSKUBtn.addEventListener('click', () => {
+            setButtonState(clearSKUBtn, false, "清空中...");
+            const skuInputs = getAllSKUInputs();
+            let clearedCount = 0;
+            skuInputs.forEach(input => {
+                if (input.getAttribute('data-auto-generated') === 'true') {
+                    setInputValue(input, "");
+                    clearedCount++;
+                }
+            });
+            setButtonState(clearSKUBtn, true, "清空");
+            showStatus(`已清空 ${clearedCount} 个自动生成的SKU`, true);
+        });
+
+        fillContentBtn.addEventListener('click', () => {
+            const title = myTitle.value.trim();
+            const bulletRaw = myBullets.value.trim();
+            const desc = myDesc.value.trim();
+            const keywords = myKeywords.value.trim();
+
+            let filledCount = 0;
+
+            if (setKatTextareaValue('kat-textarea[name="item_name-0-value"]', title)) filledCount++;
+            const bullets = parseBulletText(bulletRaw);
+            for (let i = 0; i < 5; i++) {
+                if (setKatTextareaValue(`kat-textarea[name="bullet_point-${i}-value"]`, bullets[i] || '')) filledCount++;
+            }
+            if (setKatTextareaValue('kat-textarea[name="product_description-0-value"]', convertToAmazonHTML(desc))) filledCount++;
+            if (setKatInputValue('kat-input[name="generic_keyword-0-value"]', keywords)) filledCount++;
+
+            if (filledCount > 0) {
+                showStatus(`成功填写 ${filledCount} 项内容`, true);
+            } else {
+                showStatus("⚠️ 未找到对应输入框，请确认页面已加载", false);
+            }
+        });
+
+        fillModelBtn.addEventListener('click', () => {
+            const sku = generateRandomBaseSKU();
+            let filledCount = 0;
+
+            if (setKatInputValue('kat-input[name="model_number-0-value"]', sku)) filledCount++;
+            if (setKatTextareaValue('kat-textarea[name="model_name-0-value"]', sku)) filledCount++;
+            if (setKatInputValue('kat-input[name="manufacturer-0-value"]', sku)) filledCount++;
+            if (setKatInputValue('kat-input[name="part_number-0-value"]', sku)) filledCount++;
+
+            if (filledCount > 0) {
+                showStatus(`已填写型号信息: ${sku}`, true);
+            } else {
+                showStatus("⚠️ 未找到型号相关字段", false);
+            }
+        });
+
+        clearAllBtn.addEventListener('click', () => {
+            let clearedCount = 0;
+
+            if (setKatTextareaValue('kat-textarea[name="item_name-0-value"]', '')) clearedCount++;
+            for (let i = 0; i < 5; i++) {
+                if (setKatTextareaValue(`kat-textarea[name="bullet_point-${i}-value"]`, '')) clearedCount++;
+            }
+            if (setKatTextareaValue('kat-textarea[name="product_description-0-value"]', '')) clearedCount++;
+            if (setKatInputValue('kat-input[name="generic_keyword-0-value"]', '')) clearedCount++;
+            if (setKatInputValue('kat-input[name="model_number-0-value"]', '')) clearedCount++;
+            if (setKatTextareaValue('kat-textarea[name="model_name-0-value"]', '')) clearedCount++;
+            if (setKatInputValue('kat-input[name="manufacturer-0-value"]', '')) clearedCount++;
+            if (setKatInputValue('kat-input[name="part_number-0-value"]', '')) clearedCount++;
+
+            showStatus(`已清空 ${clearedCount} 项内容`, true);
+        });
+
+        const cachedTitle = await GM_getValue('cached-title', '');
+        const cachedBullets = await GM_getValue('cached-bullets', '');
+        const cachedDesc = await GM_getValue('cached-desc', '');
+        const cachedKeywords = await GM_getValue('cached-keywords', '');
+
+        myTitle.value = cachedTitle;
+        myBullets.value = cachedBullets;
+        myDesc.value = cachedDesc;
+        myKeywords.value = cachedKeywords;
+
+        myTitle.addEventListener('input', () => GM_setValue('cached-title', myTitle.value));
+        myBullets.addEventListener('input', () => GM_setValue('cached-bullets', myBullets.value));
+        myDesc.addEventListener('input', () => GM_setValue('cached-desc', myDesc.value));
+        myKeywords.addEventListener('input', () => GM_setValue('cached-keywords', myKeywords.value));
+
+        showStatus("✅ 工具已加载，正在自动勾选合规选项...", true);
+    }
+    // =============== 启动入口 ===============
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initPanel);
+    } else {
+        initPanel();
+    }
+
+})();
