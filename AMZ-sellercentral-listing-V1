@@ -31,13 +31,13 @@
         const panel = document.createElement('div');
         panel.id = 'auto-fill-panel';
         panel.style.position = 'fixed';
-        panel.style.top = '100px';
+        panel.style.top = '400px';
         panel.style.right = '20px';
         panel.style.zIndex = '99999';
         panel.style.background = '#fff';
         panel.style.border = '2px solid #ccc';
         panel.style.padding = '15px';
-        panel.style.width = '300px';
+        panel.style.width = '350px';
         panel.style.fontSize = '14px';
         panel.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
 
