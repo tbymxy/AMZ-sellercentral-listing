@@ -1,0 +1,111 @@
+// ==UserScript==
+// @name         Amazon Listing 一键填写描述与要点（支持标题格式）
+// @namespace    http://tampermonkey.net/
+// @version      1.2
+// @description  一键填写产品描述与要点，支持【标题】+正文格式
+// @author       You
+// @match        https://sellercentral.amazon.com/abis/listing/*
+// @match        https://sellercentral.amazon.ca/abis/listing/*
+// @match        https://sellercentral.amazon.com.mx/abis/listing/*
+// @match        https://sellercentral-japan.amazon.com/abis/listing/*
+// @match        https://sellercentral.amazon.com.au/abis/listing/*
+// @match        https://sellercentral.amazon.co.uk/abis/listing/*
+// @match        https://sellercentral.amazon.de/abis/listing/*
+// @match        https://sellercentral.amazon.fr/abis/listing/*
+// @match        https://sellercentral.amazon.it/abis/listing/*
+// @match        https://sellercentral.amazon.es/abis/listing/*
+// @match        https://sellercentral.amazon.nl/abis/listing/*
+// @match        https://sellercentral.amazon.se/abis/listing/*
+// @match        https://sellercentral.amazon.pl/abis/listing/*
+// @match        https://sellercentral.amazon.be/abis/listing/*
+// @icon         https://www.amazon.com/favicon.ico
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // 创建面板
+    function createPanel() {
+        if (document.getElementById('auto-fill-panel')) return;
+        const panel = document.createElement('div');
+        panel.id = 'auto-fill-panel';
+        panel.style.position = 'fixed';
+        panel.style.top = '100px';
+        panel.style.right = '20px';
+        panel.style.zIndex = '99999';
+        panel.style.background = '#fff';
+        panel.style.border = '2px solid #ccc';
+        panel.style.padding = '15px';
+        panel.style.width = '300px';
+        panel.style.fontSize = '14px';
+        panel.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+
+        panel.innerHTML = `
+          <h3 style="margin-top:0;font-size:16px;">📝 一键填写工具</h3>
+          <label>产品描述：</label>
+          <textarea id="my-desc" rows="6" style="width:100%;margin-bottom:10px;"></textarea>
+          <label>要点（支持【标题】+正文格式）：</label>
+          <textarea id="my-bullets" rows="10" style="width:100%;margin-bottom:10px;"></textarea>
+          <button id="fill-btn" style="width:100%;padding:8px;background:#ff9900;color:#fff;border:none;cursor:pointer;">一键填写</button>
+        `;
+        document.body.appendChild(panel);
+        document.getElementById('fill-btn').addEventListener('click', autoFill);
+    }
+
+    // 将描述转为HTML允许标签（保留段落和换行）
+    function convertToAmazonHTML(text) {
+        const paragraphs = text.trim().split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`);
+        return paragraphs.join('');
+    }
+
+    // 往 kat-textarea 输入内容
+    function setKatTextareaValue(selector, value) {
+        const kat = document.querySelector(selector);
+        if (!kat) return false;
+        const real = kat.shadowRoot && kat.shadowRoot.querySelector('textarea');
+        if (!real) return false;
+        real.value = value;
+        real.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        return true;
+    }
+
+    // 解析要点：支持【标题】正文格式
+    function parseBulletText(text) {
+        const matches = [...text.matchAll(/【(.*?)】([\s\S]*?)(?=(?:【|$))/g)];
+        return matches.slice(0, 5).map(m => `【${m[1].trim()}】${m[2].trim().replace(/\n+/g, ' ')}`);
+    }
+
+    // 一键填写逻辑
+    function autoFill() {
+        const desc = document.getElementById('my-desc').value;
+        const bulletRaw = document.getElementById('my-bullets').value;
+
+        const htmlDesc = convertToAmazonHTML(desc);
+        const descOk = setKatTextareaValue('kat-textarea[name="product_description-0-value"]', htmlDesc);
+
+        const bullets = parseBulletText(bulletRaw);
+        let bulletOk = false;
+        for (let i = 0; i < 5; i++) {
+            const bullet = bullets[i] || '';
+            const ok = setKatTextareaValue(`kat-textarea[name="bullet_point-${i}-value"]`, bullet);
+            if (ok) bulletOk = true;
+        }
+
+        if (descOk || bulletOk) {
+            alert('已完成填写 ✅');
+        } else {
+            alert('⚠️ 没找到输入框，请确认当前页面已加载完成');
+        }
+    }
+
+    function waitForPage() {
+        if (document.querySelector('kat-textarea[name="product_description-0-value"]')) {
+            createPanel();
+        } else {
+            setTimeout(waitForPage, 2000);
+        }
+    }
+
+    waitForPage();
+})();
