@@ -5,6 +5,20 @@
 // @description      集成 SKU 批量生成、父SKU管理、复制/清空、一键填写标题/要点/描述/关键词/型号/制造商等字段，提升效率
 // @author           Optimized by ChatGPT
 // @match            https://sellercentral.amazon.*/abis/listing/*
+// @match       https://sellercentral.amazon.com/abis/listing/*
+// @match       https://sellercentral.amazon.ca/abis/listing/*
+// @match       https://sellercentral.amazon.com.mx/abis/listing/*
+// @match       https://sellercentral-japan.amazon.com/abis/listing/*
+// @match       https://sellercentral.amazon.com.au/abis/listing/*
+// @match       https://sellercentral.amazon.co.uk/abis/listing/*
+// @match       https://sellercentral.amazon.de/abis/listing/*
+// @match       https://sellercentral.amazon.fr/abis/listing/*
+// @match       https://sellercentral.amazon.it/abis/listing/*
+// @match       https://sellercentral.amazon.es/abis/listing/*
+// @match       https://sellercentral.amazon.nl/abis/listing/*
+// @match       https://sellercentral.amazon.se/abis/listing/*
+// @match       https://sellercentral.amazon.pl/abis/listing/*
+// @match       https://sellercentral.amazon.be/abis/listing/*
 // @icon             https://www.amazon.com/favicon.ico
 // @grant            GM_setValue
 // @grant            GM_getValue
