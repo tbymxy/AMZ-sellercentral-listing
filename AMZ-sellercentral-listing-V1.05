@@ -1,0 +1,379 @@
+// ==UserScript==
+// @name             亚马逊SKU与型号辅助工具（极简版）
+// @namespace        http://tampermonkey.net/
+// @version          8.5
+// @description      集成父SKU自动生成、子SKU字母序列填充、型号信息一键填写。页面加载后自动勾选"无品牌"和"无商品编码"。
+// @author           Optimized Version
+// @match  https://sellercentral.amazon.com/abis/listing/*
+// @match  https://sellercentral.amazon.ca/abis/listing/*
+// @match  https://sellercentral.amazon.com.mx/abis/listing/*
+// @match  https://sellercentral-japan.amazon.com/abis/listing/*
+// @match  https://sellercentral.amazon.com.au/abis/listing/*
+// @match  https://sellercentral.amazon.co.uk/abis/listing/*
+// @match  https://sellercentral.amazon.de/abis/listing/*
+// @match  https://sellercentral.amazon.fr/abis/listing/*
+// @match  https://sellercentral.amazon.it/abis/listing/*
+// @match  https://sellercentral.amazon.es/abis/listing/*
+// @match  https://sellercentral.amazon.nl/abis/listing/*
+// @match  https://sellercentral.amazon.se/abis/listing/*
+// @match  https://sellercentral.amazon.pl/abis/listing/*
+// @match  https://sellercentral.amazon.be/abis/listing/*
+// @icon             https://www.amazon.com/favicon.ico
+// @grant            GM_setValue
+// @grant            GM_getValue
+// @grant            GM_addStyle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // =============== 样式注入 ===============
+    const style = document.createElement('style');
+    style.textContent = `
+        .amazon-helper-panel {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            width: 220px;
+            background: white !important;
+            padding: 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 99999 !important;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+        }
+        .amazon-helper-panel .button-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin: 0;
+        }
+        .amazon-helper-panel button {
+            padding: 6px 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s ease;
+            font-size: 13px;
+        }
+        .amazon-helper-panel button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .amazon-helper-panel .primary-btn {
+            background-color: #ff9900;
+            color: white;
+        }
+        .amazon-helper-panel .primary-btn:hover:not(:disabled) {
+            background-color: #e88a00;
+        }
+        .amazon-helper-panel .tertiary-btn {
+            background-color: #28a745;
+            color: white;
+        }
+        .amazon-helper-panel .tertiary-btn:hover:not(:disabled) {
+            background-color: #218838;
+        }
+        .amazon-helper-panel .status-message {
+            margin-top: 8px;
+            padding: 6px;
+            border-radius: 4px;
+            display: none;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .amazon-helper-panel .success {
+            background-color: #e6f4ea;
+            color: #0f7c3d;
+            border: 1px solid #a3d9b1;
+        }
+        .amazon-helper-panel .error {
+            background-color: #fde8e8;
+            color: #d72e2e;
+            border: 1px solid #f8b6b6;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // =============== 工具函数 ===============
+    function waitForElement(selector, timeout = 1000) {
+        return new Promise((resolve, reject) => {
+            const start = Date.now();
+            const check = () => {
+                const el = document.querySelector(selector);
+                if (el) return resolve(el);
+                if (Date.now() - start > timeout) return reject(new Error(`Timeout waiting for ${selector}`));
+                setTimeout(check, 50);
+            };
+            check();
+        });
+    }
+
+    function setKatInputValue(selector, value) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const real = kat.shadowRoot.querySelector('input');
+        if (!real) return false;
+        real.value = value;
+        real.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        real.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+    }
+
+    function setKatTextareaValue(selector, value) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const real = kat.shadowRoot.querySelector('textarea');
+        if (!real) return false;
+        real.value = value;
+        real.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        real.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+    }
+
+    function setKatCheckboxChecked(selector, checked) {
+        const kat = document.querySelector(selector);
+        if (!kat || !kat.shadowRoot) return false;
+        const real = kat.shadowRoot.querySelector('input[type="checkbox"]');
+        if (!real) return false;
+        if (real.checked !== checked) {
+            real.click(); // 触发亚马逊内部事件
+        }
+        return true;
+    }
+
+    function showStatus(message, isSuccess) {
+        const status = document.getElementById('sc-statusMessage');
+        if (!status) return;
+        status.textContent = message;
+        status.className = `status-message ${isSuccess ? 'success' : 'error'}`;
+        status.style.display = 'block';
+        setTimeout(() => { status.style.display = 'none'; }, 2000);
+    }
+
+    function generateRandomBaseSKU() {
+        const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+        const prefix = "A" + date;
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let random = "";
+        for (let i = 0; i < 2; i++) { // 从4减少到2
+            random += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return `${prefix}-${random}`;
+    }
+
+    function generateLetterSequence(index) {
+        const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let sequence = "";
+        let i = index;
+        while (i >= 0) {
+            sequence = letters[i % 26] + sequence;
+            i = Math.floor(i / 26) - 1;
+        }
+        return sequence;
+    }
+
+    function setInputValue(input, value) {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, "value"
+        ).set;
+        nativeInputValueSetter.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        input.setAttribute('data-auto-generated', 'true');
+    }
+
+    function getAllSKUInputs() {
+        const inputs = [];
+        document.querySelectorAll('input[aria-label="SKU"]').forEach(input => inputs.push(input));
+        if (inputs.length === 0) {
+            document.querySelectorAll("kat-input").forEach(kat => {
+                if (kat.shadowRoot) {
+                    const innerInput = kat.shadowRoot.querySelector('input[aria-label="SKU"]');
+                    if (innerInput) inputs.push(innerInput);
+                }
+            });
+        }
+        return inputs;
+    }
+
+    function setButtonState(button, enabled, text) {
+        button.disabled = !enabled;
+        button.textContent = text;
+    }
+
+    // =============== 主面板构建 ===============
+    async function initPanel() {
+        if (document.getElementById('amazon-helper-panel')) return;
+
+        const panel = document.createElement('div');
+        panel.id = 'amazon-helper-panel';
+        panel.className = 'amazon-helper-panel';
+        panel.innerHTML = `
+            <div class="button-group">
+                <button id="sc-generateAndCopySKU" class="primary-btn" title="生成并复制父SKU">生成并复制</button>
+                <button id="sc-fillSKU" class="primary-btn" disabled>生成子SKU</button>
+                <button id="fill-model" class="tertiary-btn" disabled>填写型号</button>
+            </div>
+            <div id="sc-statusMessage" class="status-message"></div>
+        `;
+        document.body.appendChild(panel);
+
+        // 获取所有控件
+        const generateAndCopyBtn = document.getElementById('sc-generateAndCopySKU');
+        const fillSKUBtn = document.getElementById('sc-fillSKU');
+        const fillModelBtn = document.getElementById('fill-model');
+
+        // ========== 自动勾选"无品牌"和"无商品编码" ==========
+        let autoCheckedDone = false;
+
+        function clickKatCheckbox(kat) {
+            if (!kat) return false;
+            let inner = kat.shadowRoot?.querySelector('input[type="checkbox"], div[role="checkbox"], button');
+            if (!inner) inner = kat;
+
+            const isChecked = inner.getAttribute('aria-checked') === 'true' || inner.checked === true;
+            if (!isChecked) {
+                inner.click();
+                return true;
+            }
+            return false;
+        }
+
+        function tryAutoCheck() {
+            if (autoCheckedDone) return;
+
+            const brandCheckbox = document.querySelector('#attribute-group-brand kat-checkbox.brand-checkbox, #attribute-group-brand div.brand-checkbox > kat-checkbox');
+            const upcCheckbox = document.querySelector('#attribute-group-externally_assigned_product_identifier kat-checkbox.product-id-checkbox');
+
+            let clicked = false;
+
+            if (brandCheckbox && clickKatCheckbox(brandCheckbox)) {
+                console.log('✅ 已勾选无品牌');
+                clicked = true;
+            }
+
+            if (upcCheckbox && clickKatCheckbox(upcCheckbox)) {
+                console.log('✅ 已勾选无商品编码');
+                clicked = true;
+            }
+
+            const brandChecked = brandCheckbox && (
+                brandCheckbox.shadowRoot?.querySelector('input, div[role="checkbox"]')?.getAttribute('aria-checked') === 'true'
+                || brandCheckbox.shadowRoot?.querySelector('input')?.checked === true
+            );
+
+            const upcChecked = upcCheckbox && (
+                upcCheckbox.shadowRoot?.querySelector('input, div[role="checkbox"]')?.getAttribute('aria-checked') === 'true'
+                || upcCheckbox.shadowRoot?.querySelector('input')?.checked === true
+            );
+
+            if (brandChecked && upcChecked) {
+                autoCheckedDone = true;
+                showStatus('✅ 已自动勾选“无品牌”和“无商品编码”', true);
+                console.log('✅ 检测到两个勾选框已完成，停止监听');
+                observer.disconnect();
+            } else if (clicked) {
+                showStatus('✅ 已尝试勾选合规选项', true);
+            }
+        }
+
+        // MutationObserver 实时监听 DOM
+        const observer = new MutationObserver(() => {
+            tryAutoCheck();
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // 首次尝试（防止页面加载后马上已经存在元素）
+        setTimeout(tryAutoCheck, 500);
+
+        // 启用按钮
+        async function enableButtons() {
+            setButtonState(fillSKUBtn, true, '生成子SKU');
+            setButtonState(fillModelBtn, true, '填写型号');
+        }
+
+        // 优化等待逻辑：只等待必要元素，缩短超时时间
+        try {
+            await waitForElement('kat-input[name="model_number-0-value"]');
+            await waitForElement('input[aria-label="SKU"]');
+            enableButtons();
+        } catch (err) {
+            console.warn('DOM加载超时，但仍尝试启用按钮', err);
+            enableButtons();
+        }
+
+        // ========== 事件绑定 ==========
+        // 生成并复制父SKU（合并功能）
+        generateAndCopyBtn.addEventListener('click', async () => {
+            const newSku = generateRandomBaseSKU();
+
+            try {
+                await navigator.clipboard.writeText(newSku);
+                showStatus("已生成并复制到剪贴板", true);
+            } catch (err) {
+                showStatus("已生成新SKU，复制失败，请手动复制", false);
+                console.error("复制失败:", err);
+            }
+        });
+
+        // 一键生成子SKU（仅字母序列）
+        fillSKUBtn.addEventListener('click', async () => {
+            const base = generateRandomBaseSKU(); // 直接生成新父SKU，不再需要显示
+            setButtonState(fillSKUBtn, false, "生成中...");
+            const skuInputs = getAllSKUInputs();
+
+            if (skuInputs.length === 0) {
+                showStatus("未找到SKU输入框", false);
+                setButtonState(fillSKUBtn, true, "生成子SKU");
+                return;
+            }
+
+            let successCount = 0;
+            skuInputs.forEach((input, i) => {
+                try {
+                    const sku = `${base}-${generateLetterSequence(i)}`;
+                    setInputValue(input, sku);
+                    successCount++;
+                } catch (error) {
+                    console.error("生成SKU时出错:", error);
+                }
+            });
+
+            setButtonState(fillSKUBtn, true, "生成子SKU");
+            showStatus(`成功生成 ${successCount} 个SKU`, true);
+        });
+
+        // 一键填写型号信息
+        fillModelBtn.addEventListener('click', () => {
+            const sku = generateRandomBaseSKU();
+            let filledCount = 0;
+
+            if (setKatInputValue('kat-input[name="model_number-0-value"]', sku)) filledCount++;
+            if (setKatInputValue('kat-input[name="model_name-0-value"]', sku)) filledCount++;
+            if (setKatInputValue('kat-input[name="manufacturer-0-value"]', sku)) filledCount++;
+            if (setKatInputValue('kat-input[name="part_number-0-value"]', sku)) filledCount++;
+
+            if (filledCount > 0) {
+                showStatus(`已填写型号信息`, true);
+            } else {
+                showStatus("⚠️ 未找到型号相关字段", false);
+            }
+        });
+
+        showStatus("✅ 工具已加载，正在自动勾选合规选项...", true);
+    }
+
+    // =============== 启动入口 ===============
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initPanel);
+    } else {
+        initPanel();
+    }
+
+})();
