@@ -1,0 +1,200 @@
+// ==UserScript==
+// @name         亚马逊助手 (精简优化版)
+// @namespace    http://tampermonkey.net/
+// @version      10.0
+// @description  横向极简布局，支持手动/随机前缀，子SKU序列化，型号自动填充。
+// @author       Gemini Optimized
+// @match        https://sellercentral.amazon.com/abis/listing/*
+// @match        https://sellercentral.amazon.ca/abis/listing/*
+// @match        https://sellercentral.amazon.com.mx/abis/listing/*
+// @match        https://sellercentral-japan.amazon.com/abis/listing/*
+// @match        https://sellercentral.amazon.com.au/abis/listing/*
+// @match        https://sellercentral.amazon.co.uk/abis/listing/*
+// @match        https://sellercentral.amazon.de/abis/listing/*
+// @match        https://sellercentral.amazon.fr/abis/listing/*
+// @match        https://sellercentral.amazon.it/abis/listing/*
+// @match        https://sellercentral.amazon.es/abis/listing/*
+// @match        https://sellercentral.amazon.nl/abis/listing/*
+// @match        https://sellercentral.amazon.se/abis/listing/*
+// @match        https://sellercentral.amazon.pl/abis/listing/*
+// @match        https://sellercentral.amazon.be/abis/listing/*
+// @icon         https://www.amazon.com/favicon.ico
+// @grant        GM_setValue
+// @grant        GM_getValue
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // =============== CSS 极致压缩 & 极简布局 ===============
+    const style = document.createElement('style');
+    style.textContent = `
+        #az-helper-min {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: #fff;
+            border: 1px solid #d5d9d9;
+            border-radius: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+            z-index: 2147483647;
+            font-family: Arial, sans-serif;
+            transition: opacity 0.3s;
+        }
+        #az-helper-min:hover { opacity: 1; }
+        #az-helper-min input {
+            width: 75px;
+            height: 28px;
+            padding: 0 8px;
+            border: 1px solid #888c8c;
+            border-radius: 4px;
+            font-size: 12px;
+            outline: none;
+        }
+        #az-helper-min input:focus { border-color: #007185; box-shadow: 0 0 3px #007185; }
+        #az-helper-min button {
+            height: 28px;
+            padding: 0 10px;
+            border: 1px solid #d5d9d9;
+            border-radius: 4px;
+            background: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+            transition: background 0.1s;
+        }
+        #az-helper-min .btn-random { background: #f0f2f2; }
+        #az-helper-min .btn-sku { background: #ff9900; border-color: #ff9900; color: white; }
+        #az-helper-min .btn-model { background: #007185; border-color: #007185; color: white; }
+        #az-helper-min button:hover { filter: brightness(0.95); }
+        #az-helper-min button:active { transform: translateY(1px); }
+
+        .az-toast {
+            position: fixed;
+            top: 50px;
+            right: 20px;
+            padding: 6px 12px;
+            background: #333;
+            color: #fff;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 2147483647;
+            display: none;
+            animation: azFade 0.3s;
+        }
+        @keyframes azFade { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    `;
+    document.head.appendChild(style);
+
+    // =============== 核心逻辑优化 ===============
+    const Tools = {
+        genPrefix: () => {
+            const date = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+            const random = Math.random().toString(36).substring(2, 4).toUpperCase();
+            return `A${date}-${random}`;
+        },
+
+        genLetter: (i) => {
+            let res = "", n = i;
+            while (n >= 0) {
+                res = String.fromCharCode((n % 26) + 65) + res;
+                n = Math.floor(n / 26) - 1;
+            }
+            return res;
+        },
+
+        updateInput: (el, val) => {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            setter.call(el, val);
+            ["input", "change", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true, composed: true })));
+        },
+
+        getKatInput: (sel) => {
+            const kat = document.querySelector(sel);
+            return kat?.shadowRoot?.querySelector('input, textarea');
+        },
+
+        toast: (msg, color = "#333") => {
+            const t = document.getElementById('az-toast');
+            t.textContent = msg;
+            t.style.background = color;
+            t.style.display = 'block';
+            setTimeout(() => t.style.display = 'none', 2000);
+        }
+    };
+
+    // =============== 面板构建 ===============
+    function init() {
+        if (document.getElementById('az-helper-min')) return;
+
+        const container = document.createElement('div');
+        container.id = 'az-helper-min';
+
+        const toast = document.createElement('div');
+        toast.id = 'az-toast';
+        toast.className = 'az-toast';
+        document.body.appendChild(toast);
+
+        const saved = GM_getValue('pfx', '');
+
+        container.innerHTML = `
+            <input type="text" id="az-pfx" placeholder="前缀..." value="${saved}">
+            <button class="btn-random" data-type="rnd">随机</button>
+            <button class="btn-sku" data-type="sku">子SKU</button>
+            <button class="btn-model" data-type="mod">型号</button>
+        `;
+        document.body.appendChild(container);
+
+        const pfxInp = container.querySelector('#az-pfx');
+
+        // 事件委托：优化内存占用
+        container.addEventListener('click', (e) => {
+            const type = e.target.dataset.type;
+            if (!type) return;
+
+            const currentPfx = pfxInp.value.trim();
+
+            if (type === 'rnd') {
+                const n = Tools.genPrefix();
+                pfxInp.value = n;
+                GM_setValue('pfx', n);
+            }
+            else if (type === 'sku') {
+                if (!currentPfx) return Tools.toast("先填前缀", "#d2691e");
+                const targets = [];
+                // 获取常规和 ShadowDOM 内部的 SKU 输入框
+                document.querySelectorAll('input[aria-label="SKU"]').forEach(i => targets.push(i));
+                document.querySelectorAll('kat-input').forEach(k => {
+                    const inner = k.shadowRoot?.querySelector('input[aria-label="SKU"]');
+                    if (inner) targets.push(inner);
+                });
+
+                targets.forEach((el, i) => Tools.updateInput(el, `${currentPfx}-${Tools.genLetter(i)}`));
+                Tools.toast(`成功: ${targets.length}`);
+            }
+            else if (type === 'mod') {
+                if (!currentPfx) return Tools.toast("先填前缀", "#d2691e");
+                const fields = [
+                    'model_number-0-value', 'model_name-0-value',
+                    'manufacturer-0-value', 'part_number-0-value'
+                ];
+                let count = 0;
+                fields.forEach(f => {
+                    const el = Tools.getKatInput(`[name="${f}"]`);
+                    if (el) { Tools.updateInput(el, currentPfx); count++; }
+                });
+                Tools.toast(count > 0 ? "已填写" : "未找到字段", count > 0 ? "#007185" : "#d2691e");
+            }
+        });
+
+        pfxInp.addEventListener('input', (e) => GM_setValue('pfx', e.target.value));
+    }
+
+    if (document.readyState === 'complete') init();
+    else window.addEventListener('load', init);
+})();
