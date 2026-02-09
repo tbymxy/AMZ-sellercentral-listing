@@ -47,7 +47,7 @@
         }
         #az-helper-min:hover { opacity: 1; }
         #az-helper-min input {
-            width: 75px;
+            width: 70px;
             height: 28px;
             padding: 0 8px;
             border: 1px solid #888c8c;
