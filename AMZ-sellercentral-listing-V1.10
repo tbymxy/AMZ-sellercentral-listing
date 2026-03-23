@@ -1,0 +1,255 @@
+// ==UserScript==
+// @name         亚马逊助手 (自动复制版 - 极致性能版)
+// @namespace    http://tampermonkey.net/
+// @version      10.4
+// @description  横向极简布局，支持手动/随机前缀，点击随机自动复制，子SKU序列化，型号自动填充。200+变体无感生成，带进度提示。[性能优化版]
+// @author       Gemini Optimized
+// @match        https://sellercentral.amazon.com/abis/listing/*
+// @match        https://sellercentral.amazon.ca/abis/listing/*
+// @match        https://sellercentral.amazon.com.mx/abis/listing/*
+// @match        https://sellercentral-japan.amazon.com/abis/listing/*
+// @match        https://sellercentral.amazon.com.au/abis/listing/*
+// @match        https://sellercentral.amazon.co.uk/abis/listing/*
+// @match        https://sellercentral.amazon.de/abis/listing/*
+// @match        https://sellercentral.amazon.fr/abis/listing/*
+// @match        https://sellercentral.amazon.it/abis/listing/*
+// @match        https://sellercentral.amazon.es/abis/listing/*
+// @match        https://sellercentral.amazon.nl/abis/listing/*
+// @match        https://sellercentral.amazon.se/abis/listing/*
+// @match        https://sellercentral.amazon.pl/abis/listing/*
+// @match        https://sellercentral.amazon.be/abis/listing/*
+// @icon         https://www.amazon.com/favicon.ico
+// @grant        GM_setValue
+// @grant        GM_getValue
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // =============== CSS 极致压缩 & 极简布局 ===============
+    const style = document.createElement('style');
+    style.textContent = `
+        #az-helper-min{position:fixed;top:10px;right:10px;display:flex;align-items:center;gap:6px;padding:6px 10px;background:#fff;border:1px solid #d5d9d9;border-radius:20px;box-shadow:0 2px 5px rgba(0,0,0,.15);z-index:2147483647;font-family:Arial,sans-serif;transition:all .3s ease}
+        #az-helper-min input{width:80px;height:28px;padding:0 8px;border:1px solid #888c8c;border-radius:4px;font-size:12px;outline:none}
+        #az-helper-min button{height:28px;padding:0 10px;border:1px solid #d5d9d9;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-weight:500;white-space:nowrap;transition:background-color .2s,color .2s}
+        #az-helper-min button:disabled{opacity:.7;cursor:wait}
+        #az-helper-min .btn-random{background:#f0f2f2}
+        #az-helper-min .btn-sku{background:#ff9900;border-color:#ff9900;color:#fff}
+        #az-helper-min .btn-model{background:#007185;border-color:#007185;color:#fff}
+        #az-helper-min button:hover:not(:disabled){filter:brightness(.95)}
+        .az-toast{position:fixed;top:50px;right:20px;padding:6px 12px;background:#333;color:#fff;border-radius:4px;font-size:12px;z-index:2147483647;display:none;animation:azFade .3s}
+        @keyframes azFade{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+    `;
+    document.head.appendChild(style);
+
+    // =============== 全局缓存 & 工具函数 ===============
+    // 🔥 缓存 input value setter，避免重复获取
+    const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    
+    // 🔥 预生成字母序列缓存 (支持 702 个变体: A-ZZ)
+    const letterCache = (() => {
+        const cache = [];
+        for (let i = 0; i < 702; i++) {
+            let res = '', n = i;
+            while (n >= 0) {
+                res = String.fromCharCode((n % 26) + 65) + res;
+                n = Math.floor(n / 26) - 1;
+            }
+            cache.push(res);
+        }
+        return cache;
+    })();
+
+    const Tools = {
+        genPrefix: () => {
+            const date = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+            const random = Math.random().toString(36).substring(2, 4).toUpperCase();
+            return `A${date}-${random}`;
+        },
+
+        getLetter: (i) => letterCache[i] || '', // 🔥 缓存读取，O(1)
+
+        // 🔥 优化：只触发 input 事件 + 缓存 setter
+        updateInput: (el, val) => {
+            if (!el || el.disabled || el.readOnly) return;
+            try {
+                inputValueSetter.call(el, val);
+                // 亚马逊 React 表单只需 input 事件即可识别
+                el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            } catch (e) {
+                // 降级方案：直接赋值 + 双事件兼容
+                el.value = val;
+                ['input', 'change'].forEach(t => {
+                    try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch (_) {}
+                });
+            }
+        },
+
+        getKatInput: (sel) => {
+            const kat = document.querySelector(sel);
+            return kat?.shadowRoot?.querySelector('input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])');
+        },
+
+        toast: (msg, color = '#333') => {
+            const t = document.getElementById('az-toast');
+            if (!t) return;
+            t.textContent = msg;
+            t.style.background = color;
+            t.style.display = 'block';
+            setTimeout(() => { t.style.display = 'none'; }, 2000);
+        },
+
+        copyToClipboard: (text) => {
+            if (navigator.clipboard?.writeText) {
+                return navigator.clipboard.writeText(text);
+            }
+            // 降级方案
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                return Promise.resolve();
+            } catch (e) {
+                document.body.removeChild(ta);
+                return Promise.reject(e);
+            }
+        },
+        
+        // 🔥 智能让出主线程：优先 requestIdleCallback，降级 setTimeout
+        yieldToMain: () => {
+            if (typeof requestIdleCallback !== 'undefined') {
+                return new Promise(resolve => requestIdleCallback(resolve, { timeout: 50 }));
+            }
+            return new Promise(resolve => setTimeout(resolve, 0));
+        }
+    };
+
+    // =============== 面板构建 ===============
+    function init() {
+        if (document.getElementById('az-helper-min')) return;
+
+        const container = document.createElement('div');
+        container.id = 'az-helper-min';
+
+        const toast = document.createElement('div');
+        toast.id = 'az-toast';
+        toast.className = 'az-toast';
+        document.body.appendChild(toast);
+
+        const saved = GM_getValue('pfx', '');
+
+        container.innerHTML = `
+            <input type="text" id="az-pfx" placeholder="前缀..." value="${saved}">
+            <button class="btn-random" data-type="rnd">随机</button>
+            <button class="btn-sku" data-type="sku">子SKU</button>
+            <button class="btn-model" data-type="mod">型号</button>
+        `;
+        document.body.appendChild(container);
+
+        const pfxInp = container.querySelector('#az-pfx');
+
+        container.addEventListener('click', async (e) => {
+            const btn = e.target;
+            const type = btn.dataset.type;
+            if (!type || btn.disabled) return;
+
+            const currentPfx = pfxInp.value.trim();
+
+            if (type === 'rnd') {
+                const n = Tools.genPrefix();
+                pfxInp.value = n;
+                GM_setValue('pfx', n);
+                
+                Tools.copyToClipboard(n)
+                    .then(() => Tools.toast(`已生成并复制: ${n}`, '#007185'))
+                    .catch(() => Tools.toast('生成成功，请手动复制', '#d2691e'));
+            }
+            else if (type === 'sku') {
+                if (!currentPfx) return Tools.toast('请先填写前缀', '#d2691e');
+                
+                // 🔥 预收集所有目标元素，避免重复查询
+                const targets = [];
+                
+                // 普通 input
+                document.querySelectorAll('input[aria-label="SKU"]:not([disabled]):not([readonly])')
+                    .forEach(el => targets.push(el));
+                
+                // Shadow DOM 中的 kat-input
+                document.querySelectorAll('kat-input').forEach(k => {
+                    const inner = k.shadowRoot?.querySelector('input[aria-label="SKU"]:not([disabled]):not([readonly])');
+                    if (inner) targets.push(inner);
+                });
+
+                const total = targets.length;
+                if (total === 0) return Tools.toast('未找到有效的SKU输入框', '#d2691e');
+
+                // 保存状态
+                const originalText = btn.textContent;
+                btn.disabled = true;
+                
+                // 🔥 优化分批参数：每批20个，平衡性能与响应
+                const BATCH_SIZE = 20;
+                
+                // 🔥 非阻塞分批执行
+                for (let i = 0; i < total; i++) {
+                    Tools.updateInput(targets[i], `${currentPfx}-${Tools.getLetter(i)}`);
+                    
+                    // 每批结束后让出主线程
+                    if ((i + 1) % BATCH_SIZE === 0 && i < total - 1) {
+                        btn.textContent = `${i + 1}/${total}`;
+                        await Tools.yieldToMain(); // 🔥 关键：让浏览器处理渲染/用户交互
+                    }
+                }
+
+                // 恢复状态
+                btn.textContent = originalText;
+                btn.disabled = false;
+                Tools.toast(`✅ 成功生成 ${total} 个SKU`, '#ff9900');
+            }
+            else if (type === 'mod') {
+                if (!currentPfx) return Tools.toast('请先填写前缀', '#d2691e');
+                
+                const fields = [
+                    'model_number-0-value', 'model_name-0-value',
+                    'manufacturer-0-value', 'part_number-0-value'
+                ];
+                
+                let count = 0;
+                for (const f of fields) {
+                    const el = Tools.getKatInput(`[name="${f}"]`);
+                    if (el) {
+                        Tools.updateInput(el, currentPfx);
+                        count++;
+                    }
+                }
+                
+                Tools.toast(
+                    count > 0 ? `✅ 已填充 ${count} 个型号字段` : '⚠️ 未找到可用型号字段',
+                    count > 0 ? '#007185' : '#d2691e'
+                );
+            }
+        });
+
+        // 实时保存前缀
+        let saveTimer = null;
+        pfxInp.addEventListener('input', (e) => {
+            // 🔥 防抖保存，减少 GM_setValue 调用频率
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(() => {
+                GM_setValue('pfx', e.target.value);
+            }, 300);
+        });
+    }
+
+    // 初始化
+    if (document.readyState === 'complete') {
+        init();
+    } else {
+        window.addEventListener('load', init, { once: true });
+    }
+})();
