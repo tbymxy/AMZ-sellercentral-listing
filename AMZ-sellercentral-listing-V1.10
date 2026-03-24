@@ -64,7 +64,7 @@
         genPrefix: () => {
             const date = new Date().toISOString().slice(2, 10).replace(/-/g, '');
             const random = Math.random().toString(36).substring(2, 4).toUpperCase();
-            return `A${date}-${random}`;
+            return `A${date}A-${random}`;
         },
 
         getLetter: (i) => letterCache[i] || '', // 🔥 缓存读取，O(1)
